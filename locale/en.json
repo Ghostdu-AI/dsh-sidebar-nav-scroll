@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Sidebar Panel List Scroller",
+    "description": "Caps the sidebar's global panel list at half of its natural height and lets it scroll, so the freed space goes to the workspace area below."
+  }
+}
