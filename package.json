@@ -1,6 +1,6 @@
 {
   "name": "dsh-sidebar-nav-scroll",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "Caps the sidebar's global panel list at half its natural height, scrolls it, and hands the freed height to the workspace area below.",
   "license": "MIT",

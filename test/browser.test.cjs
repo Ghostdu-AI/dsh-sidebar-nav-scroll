@@ -120,7 +120,7 @@ function tick(ms = 400) {
     check('case1 sheet injected', !!window.document.getElementById('dsh-sidebar-nav-scroll'), 'true');
     const sheet = window.document.getElementById('dsh-sidebar-nav-scroll').textContent;
     check('case1 overflow rule', /overflow-y:\s*auto\s*!important/.test(sheet), 'true');
-    check('case1 thumb token', /--dsh-scrollbar-thumb:\s*var\(--dsw-alias-scrollbar-bg-l2\)/.test(sheet), 'true');
+    check('case1 thumb token', /--dsh-scrollbar-thumb:\s*var\(--dsw-alias-scrollbar-bg-l2,\s*rgba\(128, 128, 128, 0\.45\)\)/.test(sheet), 'true');
     check('case1 collapse guard', /\[data-sidebar-collapsed\] \[data-dsh-sidebar-nav-scroll\]/.test(sheet), 'true');
     const cs = window.getComputedStyle(nav);
     check('case1 computed overflow-y', cs.overflowY, 'auto');
@@ -252,6 +252,74 @@ function tick(ms = 400) {
     window.__DSH_SIDEBAR_SCROLL__.set({});
     await tick();
     check('case12 disabled clears cap', nav.style.getPropertyValue('--dsh-sidebar-nav-scroll-cap'), '');
+  }
+
+  // --- Case 13: the host's scroll hand-off must not swallow the wheel over the cap.
+  // The host binds a non-passive `wheel` listener on the column around the panel list
+  // and redirects every wheel it sees to the workspaces scroller below. The plugin has
+  // to claim the event in the capture phase while the list can still move, and release
+  // it at either edge so the column keeps its own hand-off.
+  {
+    const { window, nav } = run({ rows: 8 });
+    await tick();
+
+    // Stand in for the host: a bubble-phase listener on the column, like scroll-handoff.ts.
+    const column = nav.parentElement;
+    const seen = [];
+    column.addEventListener('wheel', (event) => {
+      seen.push({ prevented: event.defaultPrevented, deltaY: event.deltaY });
+      // The real handler calls preventDefault() and moves the section scroller instead.
+      event.preventDefault();
+    }, { passive: false });
+
+    // jsdom has no layout: give the capped list a scrollable range to work with.
+    let scrollTop = 0;
+    const maxScroll = 152;
+    Object.defineProperty(nav, 'scrollHeight', { value: maxScroll + 152, configurable: true });
+    Object.defineProperty(nav, 'clientHeight', { value: 152, configurable: true });
+    Object.defineProperty(nav, 'scrollTop', {
+      get: () => scrollTop,
+      set: (value) => { scrollTop = Math.max(0, Math.min(maxScroll, value)); },
+      configurable: true,
+    });
+
+    const wheelDown = () => {
+      const event = new window.WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true });
+      nav.dispatchEvent(event);
+      return event;
+    };
+
+    // Mid-list: the plugin stops the event, so the host's hand-off never sees it.
+    scrollTop = 40;
+    seen.length = 0;
+    wheelDown();
+    check('case13 mid-list reaches the host', seen.length, 0);
+
+    // At the bottom edge: the plugin steps aside so the column can scroll further down.
+    scrollTop = maxScroll;
+    seen.length = 0;
+    wheelDown();
+    check('case13 bottom edge reaches the host', seen.length, 1);
+    // Recorded before the stub host calls preventDefault(), so `false` means the plugin
+    // itself never blocked the event: the column's hand-off keeps working at the edge.
+    check('case13 plugin released the edge event', seen[0] && seen[0].prevented, false);
+
+    // At the top edge going up: same release.
+    scrollTop = 0;
+    seen.length = 0;
+    const up = new window.WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true });
+    nav.dispatchEvent(up);
+    check('case13 top edge reaches the host', seen.length, 1);
+
+    // Mid-list going up: claimed again.
+    scrollTop = 40;
+    seen.length = 0;
+    const upMid = new window.WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true });
+    nav.dispatchEvent(upMid);
+    check('case13 mid-list up reaches the host', seen.length, 0);
+
+    // The native scroll still happens: the plugin never preventDefaults.
+    check('case13 plugin never preventDefaults', upMid.defaultPrevented, false);
   }
 
   console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);

@@ -63,8 +63,11 @@
     '  overflow-x: hidden !important;',
     '  overscroll-behavior: contain;',
     '  scrollbar-gutter: stable;',
-    '  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);',
-    '  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);',
+    '  /* The host binds these on the column and rebinds them to `transparent` in its',
+    '     quiet-bars state; keeping a resolved colour here is what makes the cap\'s own',
+    '     bar visible. The fallbacks matter because the alias may not be defined at all. */',
+    '  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2, rgba(128, 128, 128, 0.45));',
+    '  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2, rgba(128, 128, 128, 0.65));',
     '}',
     '[' + ATTR + '][' + ATTR_STATE + '="' + STATE_CAPPED + '"] > * {',
     '  flex-shrink: 0;',
@@ -295,6 +298,24 @@
     }
     if (cap >= metrics.natural) return 0;
     return cap;
+  }
+
+  /**
+   * Whether the capped list still has room to move in the wheel's direction.
+   * Sub-pixel remainders count as the edge, matching the host's own `atEnd` test.
+   */
+  function canScrollFurther(list, delta) {
+    if (delta > 0) return list.scrollHeight - list.clientHeight - list.scrollTop >= 1;
+    return list.scrollTop > 0;
+  }
+
+  /** Vertical wheel distance in pixels, following the same rules as the host. */
+  function wheelPixels(event, page) {
+    if (event.ctrlKey) return 0;
+    if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return 0;
+    if (event.deltaMode === 1) return event.deltaY * 16;
+    if (event.deltaMode === 2) return event.deltaY * page;
+    return event.deltaY;
   }
 
   function ensureSheet() {
@@ -553,6 +574,7 @@
     var resizeObserver = null;
     var mutationObserver = null;
     var collapseObserver = null;
+    var wheelHandler = null;
     var attachTimer = null;
     var watchTimer = null;
     var frame = null;
@@ -626,6 +648,24 @@
       unbind();
       boundList = list;
       list.setAttribute(ATTR, MARK);
+      /* The host puts a non-passive `wheel` listener on the scrolling column around this
+       * list and hands every wheel it sees to the workspaces scroller below, so a wheel
+       * over the capped list would move that section instead of this one. Claiming the
+       * event in the capture phase — before it can bubble to the column — leaves the
+       * browser's own scrolling to the list, and only while the list can still move in
+       * that direction; at either edge the event is released so the column keeps its
+       * hand-off. `passive` is safe here: the listener only stops propagation. */
+      wheelHandler = function (event) {
+        if (!boundList || event.defaultPrevented) return;
+        var delta = wheelPixels(event, boundList.clientHeight);
+        if (!delta) return;
+        if (canScrollFurther(boundList, delta)) event.stopPropagation();
+      };
+      try {
+        list.addEventListener('wheel', wheelHandler, { capture: true, passive: true });
+      } catch (error) {
+        list.addEventListener('wheel', wheelHandler, true);
+      }
       if (typeof window.ResizeObserver === 'function') {
         try {
           resizeObserver = new window.ResizeObserver(function () {
@@ -663,6 +703,14 @@
 
     function unbind() {
       if (boundList) {
+        if (wheelHandler) {
+          try {
+            boundList.removeEventListener('wheel', wheelHandler, { capture: true });
+          } catch (error) {
+            boundList.removeEventListener('wheel', wheelHandler, true);
+          }
+          wheelHandler = null;
+        }
         boundList.style.removeProperty('--dsh-sidebar-nav-scroll-cap');
         boundList.removeAttribute(ATTR);
         boundList.removeAttribute(ATTR_STATE);
